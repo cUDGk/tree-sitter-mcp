@@ -16,6 +16,7 @@ import {
   EXT_TO_LANG,
   type LangId,
 } from "./queries.js";
+import { buildPatterns, findFiles, DEFAULT_EXCLUDES } from "./scan.js";
 
 const require = createRequire(import.meta.url);
 
@@ -171,7 +172,19 @@ async function queryAction(p: {
   return { language: lang, path: src.path, match_count: results.length, truncated: results.length === limit, matches: results };
 }
 
-async function findDefs(p: { code?: string; path?: string; language?: string }): Promise<any> {
+function sliceLines(code: string, startLine1: number, endLine1: number): string {
+  const lines = code.split(/\r?\n/);
+  const s = Math.max(0, startLine1 - 1);
+  const e = Math.min(lines.length, endLine1);
+  return lines.slice(s, e).join("\n");
+}
+
+async function findDefs(p: {
+  code?: string; path?: string; language?: string;
+  with_body?: boolean;
+  context_before?: number;
+  context_after?: number;
+}): Promise<any> {
   const lang = detectLang(p);
   const q = DEFINITION_QUERIES[lang];
   if (!q) throw new Error(`no definition query defined for "${lang}"`);
@@ -182,6 +195,8 @@ async function findDefs(p: { code?: string; path?: string; language?: string }):
   const query = language.query(q);
   const matches = query.matches(tree.rootNode);
   const defs: any[] = [];
+  const before = p.context_before ?? 0;
+  const after = p.context_after ?? 0;
   for (const m of matches) {
     let kindCapture: any, nameCapture: any;
     for (const c of m.captures) {
@@ -189,18 +204,104 @@ async function findDefs(p: { code?: string; path?: string; language?: string }):
       else kindCapture = c;
     }
     if (!kindCapture || !nameCapture) continue;
-    defs.push({
+    const startLine = kindCapture.node.startPosition.row + 1;
+    const endLine = kindCapture.node.endPosition.row + 1;
+    const entry: any = {
       kind: kindCapture.name,
       name: nameCapture.node.text,
-      start_line: kindCapture.node.startPosition.row + 1,
-      end_line: kindCapture.node.endPosition.row + 1,
+      start_line: startLine,
+      end_line: endLine,
       signature: nodeLine(src.code, kindCapture.node.startPosition.row).trim().slice(0, 200),
-    });
+    };
+    if (p.with_body) {
+      entry.body = sliceLines(src.code, Math.max(1, startLine - before), endLine + after);
+    } else if (before > 0 || after > 0) {
+      entry.context = sliceLines(src.code, Math.max(1, startLine - before), startLine + after);
+    }
+    defs.push(entry);
   }
   defs.sort((a, b) => a.start_line - b.start_line);
   const byKind: Record<string, number> = {};
   for (const d of defs) byKind[d.kind] = (byKind[d.kind] ?? 0) + 1;
   return { language: lang, path: src.path, total: defs.length, by_kind: byKind, definitions: defs };
+}
+
+async function scanProject(p: {
+  root: string;
+  patterns?: string[];
+  language?: string;
+  exclude?: string[];
+  max_files?: number;
+  max_files_reported?: number;
+  include_signatures?: boolean;
+  limit_per_file?: number;
+  follow_symlinks?: boolean;
+}): Promise<any> {
+  let langFilter: LangId | undefined;
+  if (p.language) {
+    const l = p.language.toLowerCase();
+    if (l in EXT_TO_LANG) langFilter = EXT_TO_LANG[l];
+    else if ((Object.values(EXT_TO_LANG) as string[]).includes(l)) langFilter = l as LangId;
+    else throw new Error(`unknown language: "${p.language}"`);
+  }
+  const patterns = buildPatterns({ language: langFilter, patterns: p.patterns });
+  const files = await findFiles({
+    root: p.root,
+    patterns,
+    exclude: p.exclude,
+    max_files: p.max_files,
+    follow_symlinks: p.follow_symlinks,
+  });
+  const byLanguage: Record<string, number> = {};
+  const byKind: Record<string, number> = {};
+  const fileReports: any[] = [];
+  const errors: any[] = [];
+  let totalDefs = 0;
+  const includeSigs = p.include_signatures !== false;
+  const limitPerFile = p.limit_per_file ?? 200;
+  const maxReported = p.max_files_reported ?? 200;
+
+  for (const file of files) {
+    let ext = file.split(".").pop()?.toLowerCase() ?? "";
+    if (!(ext in EXT_TO_LANG)) continue;
+    const lang = EXT_TO_LANG[ext];
+    if (langFilter && lang !== langFilter) continue;
+    if (!DEFINITION_QUERIES[lang]) continue;
+    try {
+      const r = await findDefs({ path: file });
+      totalDefs += r.total;
+      byLanguage[lang] = (byLanguage[lang] ?? 0) + r.total;
+      for (const [k, v] of Object.entries(r.by_kind as Record<string, number>)) {
+        byKind[k] = (byKind[k] ?? 0) + v;
+      }
+      if (fileReports.length < maxReported) {
+        fileReports.push({
+          path: file,
+          language: lang,
+          total: r.total,
+          definitions: r.definitions.slice(0, limitPerFile).map((d: any) => {
+            const o: any = { kind: d.kind, name: d.name, line: d.start_line };
+            if (includeSigs) o.signature = d.signature;
+            return o;
+          }),
+        });
+      }
+    } catch (e: any) {
+      errors.push({ path: file, error: e.message });
+    }
+  }
+  return {
+    root: p.root,
+    patterns,
+    files_matched: files.length,
+    files_scanned: fileReports.length + errors.length,
+    files_truncated: fileReports.length >= maxReported,
+    total_definitions: totalDefs,
+    by_language: byLanguage,
+    by_kind: byKind,
+    errors,
+    files: fileReports,
+  };
 }
 
 async function findCalls(p: { code?: string; path?: string; language?: string }): Promise<any> {
@@ -308,10 +409,15 @@ Actions:
 - find_imports: list import statements.
 - outline: find_definitions + human-readable outline text.
 - query: run an arbitrary tree-sitter S-expression query against the source. Captures named @name are returned with {name, type, start, end, text}.
+- scan: walk a directory (fast-glob), run find_definitions on every matching file, aggregate. Use 'language' to filter, 'patterns' to override the glob, 'exclude' to add ignore patterns. Defaults exclude node_modules/dist/build/.git/target/venv/.venv/__pycache__/coverage/.next/out, *.min.js, *.min.css, *.map.
+
+find_definitions options:
+- with_body: include lines start..end as 'body'
+- context_before / context_after: include N lines of extra context
 
 Example queries — see README.`,
   {
-    action: z.enum(["list_languages", "parse", "query", "find_definitions", "find_calls", "find_imports", "outline"]).describe("Action"),
+    action: z.enum(["list_languages", "parse", "query", "find_definitions", "find_calls", "find_imports", "outline", "scan"]).describe("Action"),
     code: z.string().optional().describe("Inline source code"),
     path: z.string().optional().describe("Source file path (lang auto-detected from ext)"),
     language: z.string().optional().describe("Explicit language id (py/js/ts/... or full name)"),
@@ -320,6 +426,18 @@ Example queries — see README.`,
     max_depth: z.number().int().positive().optional().describe("parse: max tree depth (default 8)"),
     with_text: z.boolean().optional().describe("parse: include leaf node text"),
     limit: z.number().int().positive().optional().describe("query: max matches (default 500)"),
+    with_body: z.boolean().optional().describe("find_definitions: include lines start..end as 'body'"),
+    context_before: z.number().int().nonnegative().optional().describe("find_definitions: N lines before start"),
+    context_after: z.number().int().nonnegative().optional().describe("find_definitions: N lines after start (or after end with with_body)"),
+    // scan
+    root: z.string().optional().describe("scan: directory to walk"),
+    patterns: z.array(z.string()).optional().describe("scan: glob patterns (overrides language default)"),
+    exclude: z.array(z.string()).optional().describe("scan: extra exclude globs (added to defaults)"),
+    max_files: z.number().int().positive().optional().describe("scan: cap number of files to scan (default 500)"),
+    max_files_reported: z.number().int().positive().optional().describe("scan: cap number of per-file results in output (default 200)"),
+    include_signatures: z.boolean().optional().describe("scan: include signature text per definition (default true)"),
+    limit_per_file: z.number().int().positive().optional().describe("scan: cap definitions per file (default 200)"),
+    follow_symlinks: z.boolean().optional(),
   },
   async (p) => {
     try {
@@ -334,6 +452,17 @@ Example queries — see README.`,
         }
         case "find_definitions":
           return textContent(await findDefs(p));
+        case "scan": {
+          if (!p.root) return errContent("scan requires 'root'");
+          return textContent(await scanProject({
+            root: p.root, patterns: p.patterns, language: p.language,
+            exclude: p.exclude, max_files: p.max_files,
+            max_files_reported: p.max_files_reported,
+            include_signatures: p.include_signatures,
+            limit_per_file: p.limit_per_file,
+            follow_symlinks: p.follow_symlinks,
+          }));
+        }
         case "find_calls":
           return textContent(await findCalls(p));
         case "find_imports":
