@@ -1,12 +1,21 @@
 {
   "name": "tree-sitter-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "MCP stdio server for tree-sitter — parse / query / find_functions / find_classes via web-tree-sitter (WASM) and prebuilt grammars",
   "type": "module",
   "main": "dist/index.js",
-  "bin": { "tree-sitter-mcp": "dist/index.js" },
-  "files": ["dist", "README.md", "LICENSE"],
-  "scripts": { "build": "tsc", "start": "node dist/index.js" },
+  "bin": {
+    "tree-sitter-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "zod": "^3.23.8",

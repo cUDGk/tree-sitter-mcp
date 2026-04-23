@@ -20,6 +20,18 @@ import { buildPatterns, findFiles, DEFAULT_EXCLUDES } from "./scan.js";
 
 const require = createRequire(import.meta.url);
 
+// Claude Code の LLM ツール呼び出しパスで array/object 引数が
+// JSON 文字列化された状態で届く事があるので、両対応にする。
+function coerceObject<T>(v: T | string | undefined): T | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== "string") return v;
+  try {
+    return JSON.parse(v) as T;
+  } catch {
+    throw new Error(`expected object/array, got unparseable string: ${v.slice(0, 80)}`);
+  }
+}
+
 function wasmPath(lang: LangId): string {
   const pkgPath = require.resolve("tree-sitter-wasms/package.json");
   return join(dirname(pkgPath), "out", `tree-sitter-${lang}.wasm`);
@@ -431,8 +443,8 @@ Example queries — see README.`,
     context_after: z.number().int().nonnegative().optional().describe("find_definitions: N lines after start (or after end with with_body)"),
     // scan
     root: z.string().optional().describe("scan: directory to walk"),
-    patterns: z.array(z.string()).optional().describe("scan: glob patterns (overrides language default)"),
-    exclude: z.array(z.string()).optional().describe("scan: extra exclude globs (added to defaults)"),
+    patterns: z.union([z.array(z.string()), z.string()]).optional().describe("scan: glob patterns (overrides language default)"),
+    exclude: z.union([z.array(z.string()), z.string()]).optional().describe("scan: extra exclude globs (added to defaults)"),
     max_files: z.number().int().positive().optional().describe("scan: cap number of files to scan (default 500)"),
     max_files_reported: z.number().int().positive().optional().describe("scan: cap number of per-file results in output (default 200)"),
     include_signatures: z.boolean().optional().describe("scan: include signature text per definition (default true)"),
@@ -455,8 +467,11 @@ Example queries — see README.`,
         case "scan": {
           if (!p.root) return errContent("scan requires 'root'");
           return textContent(await scanProject({
-            root: p.root, patterns: p.patterns, language: p.language,
-            exclude: p.exclude, max_files: p.max_files,
+            root: p.root,
+            patterns: coerceObject<string[]>(p.patterns),
+            language: p.language,
+            exclude: coerceObject<string[]>(p.exclude),
+            max_files: p.max_files,
             max_files_reported: p.max_files_reported,
             include_signatures: p.include_signatures,
             limit_per_file: p.limit_per_file,
