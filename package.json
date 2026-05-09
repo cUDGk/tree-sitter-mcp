@@ -1,7 +1,7 @@
 {
   "name": "tree-sitter-mcp",
-  "version": "0.2.1",
-  "description": "MCP stdio server for tree-sitter — parse / query / find_functions / find_classes via web-tree-sitter (WASM) and prebuilt grammars",
+  "version": "0.3.0",
+  "description": "MCP stdio server for tree-sitter — parse / query / find_definitions / find_calls / find_imports / outline / scan via web-tree-sitter (WASM) and prebuilt grammars",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
