@@ -36,10 +36,28 @@ export function buildPatterns(p: {
   if (p.language) {
     const exts = LANG_TO_EXTS[p.language];
     if (!exts) throw new Error(`no extensions registered for language ${p.language}`);
-    return [`**/*.{${exts.join(",")}}`];
+    // B12: fast-glob's brace expansion {ext} for a single ext expands to a
+    // literal "{ext}" segment on some setups — sidestep it entirely.
+    return exts.length === 1 ? [`**/*.${exts[0]}`] : [`**/*.{${exts.join(",")}}`];
   }
   const allExts = Object.keys(EXT_TO_LANG);
-  return [`**/*.{${allExts.join(",")}}`];
+  return allExts.length === 1 ? [`**/*.${allExts[0]}`] : [`**/*.{${allExts.join(",")}}`];
+}
+
+// S1: validate glob patterns/excludes to prevent path traversal or negation
+// tricks that could escape the sandbox or confuse fast-glob behaviour.
+function assertSafeGlobs(globs: string[], kind: "pattern" | "exclude"): void {
+  for (const g of globs) {
+    if (kind === "exclude" && g.startsWith("!")) {
+      throw new Error(`negated ${kind} pattern not allowed: ${g}`);
+    }
+    if (g.includes("..")) {
+      throw new Error(`${kind} pattern must not contain "..": ${g}`);
+    }
+    if (kind === "pattern" && (g.startsWith("/") || g.startsWith("\\"))) {
+      throw new Error(`${kind} pattern must not start with an absolute path separator: ${g}`);
+    }
+  }
 }
 
 export async function findFiles(opts: {
@@ -47,17 +65,20 @@ export async function findFiles(opts: {
   patterns: string[];
   exclude?: string[];
   max_files?: number;
-  follow_symlinks?: boolean;
 }): Promise<string[]> {
   const root = resolvePath(opts.root);
-  const ignore = [...DEFAULT_EXCLUDES, ...(opts.exclude ?? [])];
+  assertSafeGlobs(opts.patterns, "pattern");
+  const userExcludes = opts.exclude ?? [];
+  assertSafeGlobs(userExcludes, "exclude");
+  const ignore = [...DEFAULT_EXCLUDES, ...userExcludes];
   const files = await fg(opts.patterns, {
     cwd: root,
     absolute: true,
     ignore,
     dot: false,
     onlyFiles: true,
-    followSymbolicLinks: opts.follow_symlinks === true,
+    // Hardcoded false for security — never follow symlinks during scan.
+    followSymbolicLinks: false,
   });
   const max = opts.max_files ?? 500;
   return files.slice(0, max);
