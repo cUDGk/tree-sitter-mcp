@@ -34,6 +34,7 @@ export const DEFINITION_QUERIES: Partial<Record<LangId, string>> = {
     (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @function
     (export_statement declaration: (function_declaration name: (identifier) @name)) @export
     (export_statement declaration: (class_declaration name: (identifier) @name)) @export
+    (export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]))) @export
   `,
   typescript: `
     (function_declaration name: (identifier) @name) @function
@@ -43,17 +44,23 @@ export const DEFINITION_QUERIES: Partial<Record<LangId, string>> = {
     (type_alias_declaration name: (type_identifier) @name) @type
     (enum_declaration name: (identifier) @name) @enum
     (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @function
+    (export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]))) @export
   `,
   tsx: `
     (function_declaration name: (identifier) @name) @function
     (method_definition name: (property_identifier) @name) @method
     (class_declaration name: (type_identifier) @name) @class
     (interface_declaration name: (type_identifier) @name) @interface
+    (type_alias_declaration name: (type_identifier) @name) @type
+    (enum_declaration name: (identifier) @name) @enum
     (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]) @function
+    (export_statement declaration: (lexical_declaration (variable_declarator name: (identifier) @name value: [(arrow_function) (function_expression)]))) @export
   `,
   go: `
     (function_declaration name: (identifier) @name) @function
     (method_declaration name: (field_identifier) @name) @method
+    (type_declaration (type_spec name: (type_identifier) @name type: (struct_type))) @struct
+    (type_declaration (type_spec name: (type_identifier) @name type: (interface_type))) @interface
     (type_declaration (type_spec name: (type_identifier) @name)) @type
   `,
   rust: `
@@ -102,6 +109,16 @@ export const CALL_QUERIES: Partial<Record<LangId, string>> = {
   tsx: `(call_expression function: [(identifier) @name (member_expression property: (property_identifier) @name)]) @call`,
   go: `(call_expression function: [(identifier) @name (selector_expression field: (field_identifier) @name)]) @call`,
   rust: `(call_expression function: [(identifier) @name (field_expression field: (field_identifier) @name) (scoped_identifier name: (identifier) @name)]) @call`,
+  c: `(call_expression function: [(identifier) @name (field_expression field: (field_identifier) @name)]) @call`,
+  cpp: `(call_expression function: [(identifier) @name (field_expression field: (field_identifier) @name) (qualified_identifier name: (identifier) @name)]) @call`,
+  java: `(method_invocation name: (identifier) @name) @call`,
+  ruby: `(call method: (identifier) @name) @call`,
+  bash: `(command name: (command_name) @name) @call`,
+  php: `
+    (function_call_expression function: [(name) @name (qualified_name) @name]) @call
+    (member_call_expression name: (name) @name) @call
+    (scoped_call_expression name: (name) @name) @call
+  `,
 };
 
 export const IMPORT_QUERIES: Partial<Record<LangId, string>> = {
@@ -122,6 +139,6 @@ export const IMPORT_QUERIES: Partial<Record<LangId, string>> = {
     (import_spec path: (interpreted_string_literal) @module) @import
   `,
   rust: `
-    (use_declaration) @import
+    (use_declaration argument: (_) @module) @import
   `,
 };
